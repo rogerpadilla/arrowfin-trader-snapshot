@@ -56,51 +56,36 @@ Checks: `npm test`, `npm run test:e2e` (tenant isolation against the real databa
 ## How it is put together
 
 ```
-packages/contracts       wire types and constants shared by API and web
-apps/api                 NestJS, hexagonal
-  snapshot/domain          pure functions: CME session, position replay, risk (unit-tested, no I/O)
-  snapshot/application     use cases + ports
-  snapshot/infrastructure  Prisma adapters, REST controller, Socket.IO gateway, response mapping
-  tenancy                  the only database handle: withTenant(scope, work)
-  auth                     session JWT in an HttpOnly cookie, one authenticate() for REST and sockets
-  dev                      dev login + fill simulator, not mounted unless enabled
-  prisma/                  schema, migrations (incl. RLS + grants), seed
-apps/web                 Next.js App Router, TanStack Query, socket.io-client
+packages/contracts   wire types shared by API and web
+apps/api             NestJS, hexagonal
+  snapshot/domain      pure, unit-tested maths: CME session, position replay, risk
+  snapshot/...         use cases, ports, Prisma adapters, REST controller, Socket.IO gateway
+  tenancy              the only database handle: withTenant(scope, work)
+  auth                 HttpOnly-cookie JWT, one authenticate() for REST and sockets
+  dev                  dev login + fill simulator, only mounted when enabled
+apps/web             Next.js, TanStack Query, socket.io-client
 ```
 
-`GET /me/snapshot` takes the trader from the session, loads their accounts and fills in one tenant transaction, and replays the fills in the domain. Positions carry across sessions; realized P&L, commissions and counts cover today's session only. The index `(broker_id, account_id, filled_at)` fits that read: tenant first (the RLS filter), then the trader's accounts, then time.
-
-Security and PII: see [SECURITY.md](SECURITY.md).
+`GET /me/snapshot` takes the trader from the session, loads their accounts and fills in one tenant transaction, and replays them in the domain. The index `(broker_id, account_id, filled_at)` matches that read: tenant first (the RLS filter), then the trader's accounts, then time. Security and PII: [SECURITY.md](SECURITY.md).
 
 ### Decisions on the data
 
-- **Today is a CME session, not a UTC day.** It opens at 17:00 Chicago time, so at the dataset cut it started `2026-08-24T22:00Z`. DST-aware and tested; holidays ignored.
-- **"Now" is the dataset cut** (`2026-08-25T14:30Z`), via a `Clock` that keeps ticking, so simulated fills land after the seed data.
-- **Contract sizes:** P&L and notional use `point_value_usd` (ES 50 vs MES 5, NQ 20 vs MNQ 2, 6E 125,000).
-- **Commissions** are per contract, per side, and come off day P&L. The rate lives on `instruments`; the server prices every fill, the client never sends one.
-- **Partial fills:** maths per fill, orders counted by `order_id` ("88 fills / 80 orders").
-- **Accounts:** closed ones are hidden unless they still hold a position (hiding exposure would hide risk). Zero balance with exposure is risk 100, not a divide-by-zero.
-- **Money** is exact decimal everywhere and a string on the wire; floats only for display.
-- **Risk** uses gross notional, so a short adds risk instead of cancelling a long. The API also returns the level (`normal`, `elevated` above 50, `high` above 75); the UI just colours it.
-- **Day P&L** = realized today − today's commissions + unrealized. With no settlement prices in the data, unrealized is measured from average entry, not yesterday's settlement.
-
-### The widget
-
-One panel per account: Day P&L, the other figures, a risk bar that always names its level (Normal, Elevated, High), and the open positions. High risk shows up three ways: a band at the top linking to the account, a red border and "High risk" tag on the panel, and the red bar, so it never depends on colour alone (`role="alert"` for screen readers). Numbers that change after a fill flash briefly, green for good and red for bad, and the risk bar slides; all motion respects reduced-motion settings. Loading, error with retry, no accounts and flat positions all have their own state. The socket lives in one hook (`apps/web/lib/use-fill-stream.ts`) with four states: connecting, live, reconnecting, signed out.
+- **Today is a CME session** (opens 17:00 Chicago), not a UTC day; "now" is the dataset cut via a ticking `Clock`.
+- **Contract sizes** (`point_value_usd`) drive P&L and notional; **commissions** are per contract per side, priced by the server.
+- **Positions carry over** between sessions; realized P&L, commissions and fill/order counts are today only.
+- **Closed accounts** are hidden unless they still hold a position; a zero balance with exposure is risk 100.
+- **Risk** uses gross notional, and the API returns the level (normal, elevated above 50, high above 75).
+- **Money** is exact decimal end to end. **Day P&L** = realized − commissions + unrealized from average entry (no settlement prices in the data).
 
 ### Reconnect behaviour
 
-The socket only signals "something changed"; the REST snapshot is the source of truth. Every connect and reconnect triggers a refetch, so fills missed while offline are picked up, and fills within 150 ms share one refetch. While disconnected, the UI says "Reconnecting", dims the numbers and shows when they were last confirmed. When the session expires, the server closes the socket and the UI asks you to sign in again.
+The socket only signals "something changed"; the REST snapshot is the source of truth. Every connect and reconnect refetches, so fills missed while offline are picked up. While disconnected the UI says "Reconnecting", dims the numbers and shows when they were last confirmed.
 
-Where it can still be stale: on a half-open connection Socket.IO only notices at its ping timeout (about 45 s), and until then the UI says "Live". It also can't tell whether it missed anything; it just refetches. In production I would add a per-tenant fill sequence so the client detects gaps and replays only what it missed.
-
-### WebSockets or SSE?
-
-I used WebSockets because they are in your stack. This stream is one-way, though, so Server-Sent Events would be simpler here: they are plain HTTP, so the REST cookie guard authenticates them with no handshake code, they can run through the same-origin rewrite, and `EventSource` reconnects with `Last-Event-ID`. If the platform only pushes to clients I would evaluate SSE; once there is order entry or other client-to-server traffic, WebSockets are the right shared choice.
+Where it can still be stale: on a half-open connection Socket.IO only notices at its ping timeout (about 45 s), and until then the UI says "Live". It also can't tell what it missed; it just refetches. Next step: a per-tenant fill sequence so the client detects gaps. For a one-way feed like this, SSE would also fit (cookie auth, `Last-Event-ID` replay); I kept WebSockets because they're in your stack.
 
 ### What I cut
 
-Holiday calendars, settlement-based P&L, a positions ledger, refresh tokens (the 15-minute session just ends), committed UI tests (I drove the UI in headless Chrome instead), multi-instance socket fan-out, CI config.
+Holiday calendars, settlement-based P&L, a positions ledger, refresh tokens, committed UI tests, multi-instance socket fan-out, CI.
 
 ## Code review (Task 4)
 
