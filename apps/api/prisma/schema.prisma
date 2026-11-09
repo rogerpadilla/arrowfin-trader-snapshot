@@ -1,0 +1,170 @@
+// Tenant tables carry broker_id and are protected by Postgres row-level security
+// (see migrations/*_row_level_security). Reference tables (instruments, marks) are global.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum BrokerType {
+  retail
+  prop
+
+  @@map("broker_type")
+}
+
+enum KycStatus {
+  verified
+  pending
+  suspended
+
+  @@map("kyc_status")
+}
+
+enum AccountType {
+  funded
+  eval
+  demo
+  pro
+  pro_plus
+
+  @@map("account_type")
+}
+
+enum AccountStatus {
+  active
+  restricted
+  closed
+
+  @@map("account_status")
+}
+
+enum Side {
+  BUY
+  SELL
+
+  @@map("side")
+}
+
+enum Liquidity {
+  maker
+  taker
+
+  @@map("liquidity")
+}
+
+model Broker {
+  id             String     @id
+  name           String
+  type           BrokerType
+  whiteLabelName String     @map("white_label_name")
+  createdAt      DateTime   @map("created_at") @db.Timestamptz(3)
+
+  traders  Trader[]
+  accounts Account[]
+  fills    Fill[]
+
+  @@map("brokers")
+}
+
+/// Regulated PII. The free-text support notes from the source data are deliberately not stored here.
+model Trader {
+  id           String    @id
+  brokerId     String    @map("broker_id")
+  firstName    String    @map("first_name")
+  lastName     String    @map("last_name")
+  email        String
+  phone        String
+  dateOfBirth  DateTime  @map("date_of_birth") @db.Date
+  ssnLast4     String    @map("ssn_last4") @db.Char(4)
+  addressLine1 String    @map("address_line1")
+  city         String
+  state        String
+  postalCode   String    @map("postal_code")
+  kycStatus    KycStatus @map("kyc_status")
+  createdAt    DateTime  @map("created_at") @db.Timestamptz(3)
+
+  broker   Broker    @relation(fields: [brokerId], references: [id])
+  accounts Account[]
+
+  @@unique([id, brokerId])
+  @@map("traders")
+}
+
+model Account {
+  id              String        @id
+  brokerId        String        @map("broker_id")
+  traderId        String        @map("trader_id")
+  accountNumber   String        @unique @map("account_number")
+  type            AccountType
+  status          AccountStatus
+  balance         Decimal       @db.Decimal(18, 2)
+  buyingPower     Decimal       @map("buying_power") @db.Decimal(18, 2)
+  maxPositionSize Int           @map("max_position_size")
+  createdAt       DateTime      @map("created_at") @db.Timestamptz(3)
+
+  broker Broker @relation(fields: [brokerId], references: [id])
+  // Composite FK: an account can only belong to a trader of the same broker.
+  trader Trader @relation(fields: [traderId, brokerId], references: [id, brokerId])
+  fills  Fill[]
+
+  @@unique([id, brokerId])
+  @@index([brokerId, traderId])
+  @@map("accounts")
+}
+
+model Instrument {
+  symbol               String  @id
+  description          String
+  exchange             String
+  pointValueUsd        Decimal @map("point_value_usd") @db.Decimal(18, 2)
+  tickSize             Decimal @map("tick_size") @db.Decimal(18, 8)
+  tickValueUsd         Decimal @map("tick_value_usd") @db.Decimal(18, 2)
+  initialMarginUsd     Decimal @map("initial_margin_usd") @db.Decimal(18, 2)
+  maintenanceMarginUsd Decimal @map("maintenance_margin_usd") @db.Decimal(18, 2)
+  /// Charged per contract, per side.
+  commissionPerContractUsd Decimal @map("commission_per_contract_usd") @db.Decimal(18, 2)
+
+  mark  MarketPrice?
+  fills Fill[]
+
+  @@map("instruments")
+}
+
+model MarketPrice {
+  symbol    String   @id
+  markPrice Decimal  @map("mark_price") @db.Decimal(18, 8)
+  asOf      DateTime @map("as_of") @db.Timestamptz(3)
+
+  instrument Instrument @relation(fields: [symbol], references: [symbol])
+
+  @@map("market_prices")
+}
+
+model Fill {
+  id               String    @id
+  brokerId         String    @map("broker_id")
+  accountId        String    @map("account_id")
+  instrumentSymbol String    @map("instrument_symbol")
+  side             Side
+  quantity         Int
+  price            Decimal   @db.Decimal(18, 8)
+  filledAt         DateTime  @map("filled_at") @db.Timestamptz(3)
+  orderId          String    @map("order_id")
+  liquidity        Liquidity
+  commissionUsd    Decimal   @map("commission_usd") @db.Decimal(18, 2)
+
+  broker     Broker     @relation(fields: [brokerId], references: [id])
+  // Composite FK: a fill can only reference an account of its own broker.
+  account    Account    @relation(fields: [accountId, brokerId], references: [id, brokerId])
+  instrument Instrument @relation(fields: [instrumentSymbol], references: [symbol])
+
+  // Serves the snapshot read: one tenant (matches the RLS predicate), a few accounts, replayed in time order.
+  @@index([brokerId, accountId, filledAt])
+  @@map("fills")
+}

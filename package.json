@@ -1,0 +1,41 @@
+{
+  "name": "arrowfin-trader-snapshot",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "type": "module",
+  "scripts": {
+    "db:up": "docker compose up -d --wait",
+    "db:down": "docker compose down -v",
+    "db:migrate": "cd apps/api && npm run db:migrate",
+    "db:seed": "cd apps/api && npm run db:seed",
+    "build:contracts": "cd packages/contracts && npm run build",
+    "build": "npm run build:contracts && (cd apps/api && npm run build) && (cd apps/web && npm run build)",
+    "dev": "npm run build:contracts && concurrently -k -n api,web -c blue,magenta \"cd apps/api && npm run dev\" \"cd apps/web && npm run dev\"",
+    "test": "cd apps/api && npm run test",
+    "test:e2e": "cd apps/api && npm run test:e2e",
+    "typecheck": "(cd packages/contracts && npm run typecheck) && (cd apps/api && npm run typecheck) && (cd apps/web && npm run typecheck)",
+    "lint": "oxlint --type-aware",
+    "lint.fix": "oxlint --type-aware --fix",
+    "format": "oxfmt",
+    "format.check": "oxfmt --check"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.7",
+    "oxfmt": "^0.78.0",
+    "oxlint": "^1.93.0",
+    "oxlint-tsgolint": "^7.0.2006",
+    "typescript": "^6.0.2"
+  },
+  "engines": {
+    "node": ">=22.12"
+  },
+  "allowScripts": {
+    "@prisma/engines@7.10.1": true,
+    "prisma@7.10.1": true,
+    "esbuild@0.28.2": true,
+    "fsevents": false
+  }
+}

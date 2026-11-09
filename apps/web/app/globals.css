@@ -1,0 +1,81 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-canvas: #0b0e13;
+  --color-panel: #11161d;
+  --color-raised: #19202a;
+  --color-rule: #232c38;
+  --color-ink: #e6ebf1;
+  --color-muted: #8a95a3;
+  --color-faint: #566171;
+  --color-up: #22c58b;
+  --color-down: #f04e5e;
+  --color-warn: #f5b83d;
+  --color-alarm: #e5384a;
+  --color-alarm-deep: #2b0e14;
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@keyframes alarm-pulse {
+  50% {
+    background-color: color-mix(in oklab, var(--color-alarm) 78%, black);
+  }
+}
+
+@utility animate-alarm {
+  animation: alarm-pulse 2s ease-in-out infinite;
+}
+
+/** Small label above a figure or a column. */
+@utility caption {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+/** Tabular figures: digits line up in columns and do not jitter when they change. */
+@utility figure {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/** One-shot background flash when a live figure changes; the colour comes from flash-up, flash-down or flash-neutral. */
+@keyframes flash {
+  from {
+    background-color: var(--flash);
+  }
+}
+
+@utility animate-flash {
+  border-radius: 3px;
+  animation: flash 1.2s ease-out;
+}
+
+@utility flash-up {
+  --flash: color-mix(in oklab, var(--color-up) 35%, transparent);
+}
+
+@utility flash-down {
+  --flash: color-mix(in oklab, var(--color-down) 35%, transparent);
+}
+
+@utility flash-neutral {
+  --flash: color-mix(in oklab, var(--color-ink) 20%, transparent);
+}
+
+:where(a, button, input, select):focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 2px;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+}
